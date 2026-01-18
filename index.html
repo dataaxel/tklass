@@ -1,90 +1,369 @@
-// Ändra BUILD när du uppdaterar filer
-const BUILD = "2026-01-18-11";
-const MODEL_JSON_URL = `./tfjs_model/model.json?v=${BUILD}`;
-const TOKENIZER_URL  = `./tfjs_model/tokenizer.json?v=${BUILD}`;
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Filmomdöme-klassificerare</title>
 
-function weightUrlConverter(url) {
-  return url.includes("?") ? `${url}&v=${BUILD}` : `${url}?v=${BUILD}`;
-}
+  <style>
+    :root{
+      --bg:#6b6fd6;
+      --card:#ffffff;
+      --muted:#6b7280;
+      --danger:#b91c1c;
+      --danger-bg:#fee2e2;
+      --ok:#065f46;
+      --ok-bg:#d1fae5;
+      --border:#e5e7eb;
+      --btn:#111827;
+      --btn2:#374151;
+    }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans";
+      background: var(--bg);
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+    .card{
+      width:min(860px, 100%);
+      background:var(--card);
+      border-radius:18px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.25);
+      padding:28px;
+    }
+    h1{
+      margin:0 0 6px 0;
+      font-size:28px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+    }
+    .sub{
+      margin:0 0 18px 0;
+      color:var(--muted);
+      font-size:14px;
+    }
+    .alert{
+      display:none;
+      border-radius:12px;
+      padding:12px 14px;
+      margin: 10px 0 16px 0;
+      border:1px solid rgba(0,0,0,.05);
+      font-size:14px;
+      line-height:1.35;
+      white-space: pre-wrap;
+    }
+    .alert.danger{ background: var(--danger-bg); color: var(--danger); }
+    .alert.ok{ background: var(--ok-bg); color: var(--ok); }
 
-async function loadAll() {
-  clearMessages();
-  els.result.style.display = 'none';
-  els.debug.textContent = '';
-  setStatus("Laddar...");
+    label{ font-weight:900; display:block; margin:12px 0 8px; }
+    textarea{
+      width:100%;
+      min-height:120px;
+      resize:vertical;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px 12px;
+      font-size:15px;
+      outline:none;
+    }
+    textarea:focus{ border-color:#9ca3af; box-shadow: 0 0 0 4px rgba(156,163,175,.25); }
 
-  log("TFJS: " + (tf?.version?.tfjs ?? "okänd"));
-  log("MODEL_JSON_URL: " + MODEL_JSON_URL);
+    .row{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      flex-wrap:wrap;
+      margin-top:12px;
+    }
+    button{
+      border:0;
+      border-radius:12px;
+      padding:12px 14px;
+      font-weight:900;
+      cursor:pointer;
+      color:#fff;
+      background:var(--btn);
+    }
+    button.secondary{ background:var(--btn2); }
 
-  try {
-    // 1) Hämta model.json som text för att hitta viktfiler
-    const mjResp = await fetch(MODEL_JSON_URL, { cache: "no-store" });
-    log("model.json status: " + mjResp.status);
-    if (!mjResp.ok) throw new Error(`Hittar inte model.json (${mjResp.status}).`);
-
-    const mjText = await mjResp.text();
-    const mj = JSON.parse(mjText);
-
-    const manifests = mj?.weightsManifest || [];
-    const weightFiles = [];
-    for (const m of manifests) {
-      for (const p of (m.paths || [])) weightFiles.push(p);
+    .result{
+      margin-top:14px;
+      padding:12px 14px;
+      border:1px solid var(--border);
+      border-radius:12px;
+      background:#f9fafb;
+      display:none;
     }
 
-    if (!weightFiles.length) {
-      throw new Error("Hittar inga weight-filer i weightsManifest. (model.json verkar fel.)");
+    .pill-row{
+      margin-top:16px;
+      padding-top:16px;
+      border-top:1px solid var(--border);
+    }
+    .pill{
+      border:1px solid var(--border);
+      background:#fff;
+      color:#111827;
+      border-radius:999px;
+      padding:8px 12px;
+      cursor:pointer;
+      font-weight:900;
     }
 
-    log("Weight files (from model.json): " + weightFiles.join(", "));
-
-    // 2) Kontrollera att varje .bin verkligen är binär och har korrekt längd
-    for (const f of weightFiles) {
-      const url = weightUrlConverter(`./tfjs_model/${f}`);
-      const r = await fetch(url, { cache: "no-store" });
-      const ct = r.headers.get("content-type") || "(saknas)";
-      log(`GET ${f} -> ${r.status} (${ct})`);
-
-      if (!r.ok) throw new Error(`Kan inte hämta weightfil: ${f} (${r.status})`);
-
-      const buf = await r.arrayBuffer();
-      log(`${f} byteLength: ${buf.byteLength}`);
-
-      if ((buf.byteLength % 4) !== 0) {
-        // Visa första bytes som hint (HTML/LFS brukar synas direkt)
-        const head = new Uint8Array(buf.slice(0, 48));
-        const headText = Array.from(head).map(b => String.fromCharCode(b)).join("");
-        throw new Error(
-          `Weightfilen ${f} är inte korrekt binär viktdata (byteLength % 4 != 0).\n` +
-          `Content-Type: ${ct}\n` +
-          `Första tecken: ${JSON.stringify(headText)}\n` +
-          `Detta händer om .bin är HTML/404/LFS-pekare eller korrupt.\n` +
-          `Öppna: ./tfjs_model/${f} i webbläsaren och kontrollera innehållet.`
-        );
-      }
+    details{
+      margin-top:14px;
+      border:1px solid var(--border);
+      border-radius:12px;
+      background:#f9fafb;
+      padding:10px 12px;
     }
+    summary{ cursor:pointer; font-weight:900; }
+    pre{
+      margin:10px 0 0 0;
+      font-size:12px;
+      line-height:1.35;
+      background:#111827;
+      color:#e5e7eb;
+      padding:12px;
+      border-radius:12px;
+      overflow:auto;
+      max-height:240px;
+    }
+    .tiny{
+      margin-top:10px;
+      color:var(--muted);
+      font-size:12px;
+    }
+    code.small{
+      font-size:12px;
+      background:#f3f4f6;
+      padding:2px 6px;
+      border-radius:8px;
+    }
+  </style>
 
-    // 3) Ladda tokenizer
-    const tj = await fetch(TOKENIZER_URL, { cache: "no-store" });
-    log("tokenizer.json status: " + tj.status);
-    if (!tj.ok) throw new Error(`Hittar inte tokenizer.json (${tj.status}).`);
-    tokenizer = await tj.json();
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+</head>
 
-    // 4) Ladda modellen på riktigt (nu när vi vet att vikter är OK)
-    await tf.setBackend('webgl');
-    await tf.ready();
-    model = await tf.loadLayersModel(MODEL_JSON_URL, { weightUrlConverter });
+<body>
+  <div class="card">
+    <h1>🎬 AI Filmomdöme-klassificerare</h1>
+    <p class="sub">Skriv ett omdöme och låt AI:n avgöra om det är positivt, negativt eller neutralt.</p>
 
-    showOk("Modellen är laddad ✅");
-    setStatus("Modell laddad ✅");
-    log("Model loaded OK");
+    <div id="alert" class="alert danger"></div>
+    <div id="ok" class="alert ok"></div>
 
-  } catch (err) {
-    console.error(err);
+    <label for="text">Ditt filmomdöme:</label>
+    <textarea id="text" placeholder="Skriv ditt omdöme här… Till exempel: 'Fantastisk film med otroliga effekter!'"></textarea>
+
+    <div class="row">
+      <button id="btnAnalyze" onclick="analyze()">Analysera känsla</button>
+      <button class="secondary" onclick="reloadModel()">Ladda om modellen</button>
+      <span class="tiny">Modell: <code class="small">./tfjs_model/model.json</code></span>
+      <span class="tiny" id="status"></span>
+    </div>
+
+    <div id="result" class="result"></div>
+
+    <div class="pill-row">
+      <div style="font-weight:900; margin-bottom:10px;">💡 Prova dessa exempel:</div>
+      <div class="row">
+        <button class="pill" onclick="setExample('Det här var en fantastisk film, jag älskade den!')">Positiv</button>
+        <button class="pill" onclick="setExample('Riktigt dålig film, slöseri med tid.')">Negativ</button>
+        <button class="pill" onclick="setExample('Filmen var okej, varken bra eller dålig.')">Neutral</button>
+      </div>
+    </div>
+
+    <details>
+      <summary>🧪 Debug (klicka för att fälla in/ut)</summary>
+      <pre id="debug"></pre>
+    </details>
+  </div>
+
+<script>
+  // Ändra BUILD när du vill tvinga bort cache
+  const BUILD = "2026-01-18-09";
+
+  const MODEL_URL = `./tfjs_model/model.json?v=${BUILD}`;
+  const TOKENIZER_URL = `./tfjs_model/tokenizer.json?v=${BUILD}`;
+
+  let model = null;
+  let tokenizer = null;
+
+  const els = {
+    alert: document.getElementById('alert'),
+    ok: document.getElementById('ok'),
+    text: document.getElementById('text'),
+    result: document.getElementById('result'),
+    debug: document.getElementById('debug'),
+    status: document.getElementById('status'),
+  };
+
+  function log(line){ els.debug.textContent += line + "\n"; }
+  function setStatus(s){ els.status.textContent = s ? `Status: ${s}` : ""; }
+
+  function showError(msg) {
+    els.alert.style.display = 'block';
+    els.ok.style.display = 'none';
+    els.alert.textContent = '✖ Fel: ' + msg;
+  }
+  function showOk(msg) {
+    els.ok.style.display = 'block';
+    els.alert.style.display = 'none';
+    els.ok.textContent = '✔ ' + msg;
+  }
+  function clearMessages() {
+    els.alert.style.display = 'none';
+    els.ok.style.display = 'none';
+    els.alert.textContent = '';
+    els.ok.textContent = '';
+  }
+
+  function normalizeText(s) {
+    return (s || '')
+      .toLowerCase()
+      .replace(/[^a-zåäö0-9\s]+/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function getWordIndex(tokObj) { return tokObj?.word_index || tokObj?.wordIndex || tokObj?.config?.word_index || null; }
+  function getMaxLen(tokObj) {
+    const v = tokObj?.max_length ?? tokObj?.config?.max_length;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 20;
+  }
+  function getOOVIndex(tokObj, wordIndex) {
+    const oovToken = tokObj?.oov_token ?? tokObj?.config?.oov_token ?? "<OOV>";
+    if (wordIndex && wordIndex[oovToken] != null) return wordIndex[oovToken];
+    if (wordIndex && wordIndex["<OOV>"] != null) return wordIndex["<OOV>"];
+    return 1;
+  }
+
+  function textToPaddedSequence(text) {
+    if (!tokenizer) throw new Error('Tokenizer saknas.');
+    const wordIndex = getWordIndex(tokenizer);
+    if (!wordIndex) throw new Error('Kunde inte hitta word_index i tokenizer.json.');
+
+    const maxLen = getMaxLen(tokenizer);
+    const oovIndex = getOOVIndex(tokenizer, wordIndex);
+
+    const cleaned = normalizeText(text);
+    const words = cleaned ? cleaned.split(' ') : [];
+    const seq = words.map(w => (wordIndex[w] != null ? wordIndex[w] : oovIndex));
+
+    const padded = new Array(maxLen).fill(0);
+    const cut = seq.slice(-maxLen);
+    for (let i = 0; i < cut.length; i++) padded[maxLen - cut.length + i] = cut[i];
+    return { padded, maxLen };
+  }
+
+  // Cache-busta även weight-filerna (.bin) – DETTA fixar din nuvarande mismatch!
+  function weightUrlConverter(url) {
+    return url.includes("?") ? `${url}&v=${BUILD}` : `${url}?v=${BUILD}`;
+  }
+
+  async function loadAll() {
+    clearMessages();
+    els.result.style.display = 'none';
+    els.debug.textContent = '';
+    setStatus("Laddar...");
+
+    log("TFJS: " + (tf?.version?.tfjs ?? "okänd"));
+    log("BUILD: " + BUILD);
+    log("MODEL_URL: " + MODEL_URL);
+    log("TOKENIZER_URL: " + TOKENIZER_URL);
+    log("----");
+
+    try {
+      await tf.setBackend('webgl');
+      await tf.ready();
+      log("Backend: " + tf.getBackend());
+
+      const tj = await fetch(TOKENIZER_URL, { cache: "no-store" });
+      log("tokenizer.json status: " + tj.status);
+      if (!tj.ok) throw new Error(`Hittar inte tokenizer.json (${tj.status}).`);
+      tokenizer = await tj.json();
+
+      // Viktigt: weightUrlConverter cache-bustar group1-shard*.bin
+      model = await tf.loadLayersModel(MODEL_URL, { weightUrlConverter });
+      log("Model loaded OK");
+      setStatus("Modell laddad ✅");
+      showOk("Modellen är laddad och klar.");
+
+    } catch (err) {
+      console.error(err);
+      model = null;
+      tokenizer = null;
+      setStatus("Modell ej laddad ❌");
+      showError(err?.message || String(err));
+      log("ERROR: " + (err?.message || String(err)));
+    }
+  }
+
+  async function reloadModel() {
+    try { if (model?.dispose) model.dispose(); } catch {}
     model = null;
     tokenizer = null;
-    setStatus("Modell ej laddad ❌");
-    showError(err?.message || String(err));
-    log("ERROR: " + (err?.message || String(err)));
+    await loadAll();
   }
-}
 
+  function labelFromScores(arr) {
+    if (arr.length === 3) {
+      let best = 0;
+      for (let i = 1; i < 3; i++) if (arr[i] > arr[best]) best = i;
+      return { label: ['Negativ', 'Neutral', 'Positiv'][best], scores: arr };
+    }
+    let best = 0;
+    for (let i = 1; i < arr.length; i++) if (arr[i] > arr[best]) best = i;
+    return { label: `Klass ${best}`, scores: arr };
+  }
+
+  async function analyze() {
+    clearMessages();
+    els.result.style.display = 'none';
+
+    const text = els.text.value.trim();
+    if (!text) return showError('Skriv ett omdöme först.');
+    if (!model || !tokenizer) return showError('Modellen är inte laddad. Klicka “Ladda om modellen”.');
+
+    try {
+      const { padded, maxLen } = textToPaddedSequence(text);
+      const inputTensor = tf.tensor2d([padded], [1, maxLen], 'int32');
+
+      const out = model.predict(inputTensor);
+      const data = await out.data();
+
+      inputTensor.dispose();
+      if (out?.dispose) out.dispose();
+
+      const arr = Array.from(data);
+      const { label, scores } = labelFromScores(arr);
+
+      els.result.style.display = 'block';
+      els.result.innerHTML =
+        `<strong>Resultat: ${label}</strong>
+         <div style="margin-top:8px;color:#374151;">
+           Scores: ${scores.map(x => (typeof x === 'number' ? x.toFixed(4) : x)).join(', ')}
+         </div>`;
+    } catch (err) {
+      console.error(err);
+      showError(err?.message || String(err));
+      log("PREDICT ERROR: " + (err?.message || String(err)));
+    }
+  }
+
+  function setExample(s) {
+    els.text.value = s;
+    els.text.focus();
+  }
+
+  window.addEventListener("load", () => loadAll());
+</script>
+</body>
+</html>
