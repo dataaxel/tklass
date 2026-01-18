@@ -1,1 +1,90 @@
+// Ändra BUILD när du uppdaterar filer
+const BUILD = "2026-01-18-11";
+const MODEL_JSON_URL = `./tfjs_model/model.json?v=${BUILD}`;
+const TOKENIZER_URL  = `./tfjs_model/tokenizer.json?v=${BUILD}`;
+
+function weightUrlConverter(url) {
+  return url.includes("?") ? `${url}&v=${BUILD}` : `${url}?v=${BUILD}`;
+}
+
+async function loadAll() {
+  clearMessages();
+  els.result.style.display = 'none';
+  els.debug.textContent = '';
+  setStatus("Laddar...");
+
+  log("TFJS: " + (tf?.version?.tfjs ?? "okänd"));
+  log("MODEL_JSON_URL: " + MODEL_JSON_URL);
+
+  try {
+    // 1) Hämta model.json som text för att hitta viktfiler
+    const mjResp = await fetch(MODEL_JSON_URL, { cache: "no-store" });
+    log("model.json status: " + mjResp.status);
+    if (!mjResp.ok) throw new Error(`Hittar inte model.json (${mjResp.status}).`);
+
+    const mjText = await mjResp.text();
+    const mj = JSON.parse(mjText);
+
+    const manifests = mj?.weightsManifest || [];
+    const weightFiles = [];
+    for (const m of manifests) {
+      for (const p of (m.paths || [])) weightFiles.push(p);
+    }
+
+    if (!weightFiles.length) {
+      throw new Error("Hittar inga weight-filer i weightsManifest. (model.json verkar fel.)");
+    }
+
+    log("Weight files (from model.json): " + weightFiles.join(", "));
+
+    // 2) Kontrollera att varje .bin verkligen är binär och har korrekt längd
+    for (const f of weightFiles) {
+      const url = weightUrlConverter(`./tfjs_model/${f}`);
+      const r = await fetch(url, { cache: "no-store" });
+      const ct = r.headers.get("content-type") || "(saknas)";
+      log(`GET ${f} -> ${r.status} (${ct})`);
+
+      if (!r.ok) throw new Error(`Kan inte hämta weightfil: ${f} (${r.status})`);
+
+      const buf = await r.arrayBuffer();
+      log(`${f} byteLength: ${buf.byteLength}`);
+
+      if ((buf.byteLength % 4) !== 0) {
+        // Visa första bytes som hint (HTML/LFS brukar synas direkt)
+        const head = new Uint8Array(buf.slice(0, 48));
+        const headText = Array.from(head).map(b => String.fromCharCode(b)).join("");
+        throw new Error(
+          `Weightfilen ${f} är inte korrekt binär viktdata (byteLength % 4 != 0).\n` +
+          `Content-Type: ${ct}\n` +
+          `Första tecken: ${JSON.stringify(headText)}\n` +
+          `Detta händer om .bin är HTML/404/LFS-pekare eller korrupt.\n` +
+          `Öppna: ./tfjs_model/${f} i webbläsaren och kontrollera innehållet.`
+        );
+      }
+    }
+
+    // 3) Ladda tokenizer
+    const tj = await fetch(TOKENIZER_URL, { cache: "no-store" });
+    log("tokenizer.json status: " + tj.status);
+    if (!tj.ok) throw new Error(`Hittar inte tokenizer.json (${tj.status}).`);
+    tokenizer = await tj.json();
+
+    // 4) Ladda modellen på riktigt (nu när vi vet att vikter är OK)
+    await tf.setBackend('webgl');
+    await tf.ready();
+    model = await tf.loadLayersModel(MODEL_JSON_URL, { weightUrlConverter });
+
+    showOk("Modellen är laddad ✅");
+    setStatus("Modell laddad ✅");
+    log("Model loaded OK");
+
+  } catch (err) {
+    console.error(err);
+    model = null;
+    tokenizer = null;
+    setStatus("Modell ej laddad ❌");
+    showError(err?.message || String(err));
+    log("ERROR: " + (err?.message || String(err)));
+  }
+}
 
